@@ -5,7 +5,8 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning.callbacks import ModelCheckpoint
 # from transformers import BertTokenizer, BertModel
-from dataset import MIDIRepresentationDataset, collate_fn
+from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
+from config import DATASET_PATH
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -95,9 +96,9 @@ class TransformerModel(pl.LightningModule):
 
 if __name__ == '__main__':
     # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    max_length = 128
+    max_length = 64
     # dataset = TransformerDataset(texts, tokenizer, max_length)
-    dataset = MIDIRepresentationDataset(["sample.mid"], max_length=max_length)
+    dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length)
     dataloader = DataLoader(dataset, batch_size=32, collate_fn=collate_fn)
 
     vocab_size = 12
@@ -109,11 +110,11 @@ if __name__ == '__main__':
     lr = 1e-4
 
     # TODO: Get these values
-    pitch_vocab_size = 13
-    time_vocab_size = 5000
-    duration_vocab_size = 256
-    velocity_vocab_size = 128
-    instrument_vocab_size = 128
+    pitch_vocab_size = 12
+    time_vocab_size = 9700
+    duration_vocab_size = 1600
+    velocity_vocab_size = 129
+    instrument_vocab_size = 129
 
     model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
                              d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr)

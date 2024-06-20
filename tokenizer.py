@@ -54,7 +54,7 @@ def tokenize(midi: pretty_midi.PrettyMIDI):
     downbeats = midi.get_downbeats()
     for ind, track in enumerate(midi.instruments):
         current_downbeat_ind = 0
-        for note in tqdm(track.notes, desc=f"Tokenizing track number {ind}"):
+        for note in track.notes:
             if current_downbeat_ind < len(downbeats) - 1 and note.start > downbeats[current_downbeat_ind+1]:
                 current_downbeat_ind += 1
 
