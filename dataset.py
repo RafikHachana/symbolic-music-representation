@@ -35,7 +35,8 @@ class MIDIRepresentationDataset(Dataset):
         # ]
 
         self.songs = []
-        for path in tqdm(midi_file_paths[:50]):
+        print(f"Found {len(midi_file_paths)} total paths")
+        for path in tqdm(midi_file_paths[:100]):
             parsed_midi = safe_parse_midi(path)
             if parsed_midi is None:
                 continue

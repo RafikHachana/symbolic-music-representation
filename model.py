@@ -1,3 +1,4 @@
+import argparse
 import pytorch_lightning as pl
 import torch
 from torch import nn
@@ -7,10 +8,12 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 # from transformers import BertTokenizer, BertModel
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
+from pytorch_lightning.loggers import TensorBoardLogger
+from position_encoding import positional_encoding_classes
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr):
+                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base"):
         super(TransformerModel, self).__init__()
         self.save_hyperparameters()
 
@@ -20,7 +23,11 @@ class TransformerModel(pl.LightningModule):
         self.velocity_embedding = nn.Embedding(velocity_vocab_size, d_model)
         self.instrument_embedding = nn.Embedding(instrument_vocab_size, d_model)
 
-        self.positional_encoding = nn.Parameter(torch.zeros(1, max_length, d_model))
+        # self.positional_encoding = nn.Parameter(torch.zeros(1, max_length, d_model))
+        if positional_encoding not in positional_encoding_classes:
+            raise ValueError(f"positional_encoding should be one of {list(positional_encoding_classes.keys())}")
+        self.positional_encoding = positional_encoding_classes[positional_encoding](d_model, max_length)
+
 
         self.transformer = nn.Transformer(
             d_model=d_model,
@@ -41,8 +48,10 @@ class TransformerModel(pl.LightningModule):
         self.automatic_optimization = False
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None, src_key_padding_mask=None, tgt_key_padding_mask=None):
-        src_emb = self.pitch_embedding(src[:, :, 0]) + self.start_embedding(src[:, :, 1]) + self.duration_embedding(src[:, :, 2]) + self.velocity_embedding(src[:, :, 3]) + self.instrument_embedding(src[:, :, 4]) + self.positional_encoding[:, :src.size(1), :]
-        tgt_emb = self.pitch_embedding(tgt[:, :, 0]) + self.start_embedding(tgt[:, :, 1]) + self.duration_embedding(tgt[:, :, 2]) + self.velocity_embedding(tgt[:, :, 3]) + self.instrument_embedding(tgt[:, :, 4]) + self.positional_encoding[:, :tgt.size(1), :]
+        # print("Min start", torch.min(src[:, :, 1]))
+        # print(src[:, :, 1])
+        src_emb = self.pitch_embedding(src[:, :, 0]) + self.start_embedding(src[:, :, 1]) + self.duration_embedding(src[:, :, 2]) + self.velocity_embedding(src[:, :, 3]) + self.instrument_embedding(src[:, :, 4]) + self.positional_encoding(src)
+        tgt_emb = self.pitch_embedding(tgt[:, :, 0]) + self.start_embedding(tgt[:, :, 1]) + self.duration_embedding(tgt[:, :, 2]) + self.velocity_embedding(tgt[:, :, 3]) + self.instrument_embedding(tgt[:, :, 4]) + self.positional_encoding(tgt)
         # + self.positional_encoding[:, :src.size(1), :]
         # tgt_emb = self.embedding(tgt) + self.positional_encoding[:, :tgt.size(1), :]
 
@@ -68,7 +77,7 @@ class TransformerModel(pl.LightningModule):
         attention_mask = batch['attention_mask'][:, :-1]
         labels = batch['labels']
 
-        tgt_input = labels[:, 1:]
+        tgt_input = labels[:, :-1]
         tgt_output = [labels[:, 1:, x] for x in range(5)]
 
 
@@ -78,14 +87,14 @@ class TransformerModel(pl.LightningModule):
         # Compute and backpropagate loss for each head separately
         total_loss = 0
         for logit, tgt in zip(logits, tgt_output):
-            loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.view(-1))
+            loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
             self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
 
         # Average the total loss
         avg_loss = total_loss / len(logits)
         self.log('train_loss', avg_loss)
-        print("Loss", avg_loss)
+        # print("Loss", avg_loss)
         return torch.tensor(avg_loss)
 
     def configure_optimizers(self):
@@ -95,11 +104,30 @@ class TransformerModel(pl.LightningModule):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    # Add the positional_encoding argument with the short form 'pe'
+    # parser.add_argument(
+    #     'positional_encoding', 
+    #     choices=['base', 'time', 'pitch', 'pitch_time'], 
+    #     help="Specify the type of positional encoding to use.",
+    #     metavar='positional_encoding',
+    #     type=str
+    # )
+    parser.add_argument(
+        '-pe',
+        choices=['base', 'time', 'pitch', 'pitch_time'],
+        help="Specify the type of positional encoding to use (short form).",
+        metavar='positional_encoding'
+    )
+
+    # Parse the arguments
+    args = parser.parse_args()
     # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     max_length = 64
     # dataset = TransformerDataset(texts, tokenizer, max_length)
     dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length)
-    dataloader = DataLoader(dataset, batch_size=32, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=48, collate_fn=collate_fn)
 
     vocab_size = 12
     d_model = 512
@@ -111,12 +139,13 @@ if __name__ == '__main__':
 
     # TODO: Get these values
     pitch_vocab_size = 12
-    time_vocab_size = 9700
-    duration_vocab_size = 1600
+    time_vocab_size = 56000
+    duration_vocab_size = 8000
     velocity_vocab_size = 129
     instrument_vocab_size = 129
 
     model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                             d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr)
-    trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')])
+                             d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding=args.positional_encoding)
+    logger = TensorBoardLogger('tb_logs', name='my_model')
+    trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=logger)
     trainer.fit(model, dataloader)

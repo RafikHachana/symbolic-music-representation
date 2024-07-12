@@ -10,11 +10,12 @@ class BaselinePositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        # pe = pe.unsqueeze(0)#.transpose(0, 1)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        return x + self.pe[:x.size(0), :]
+        # print(self.pe.shape)
+        return self.pe[:x.size(1), :].repeat(x.size(0), 1, 1)
     
 # TODO: Many more positional encodings: Absolute or relative, use Time, use Pitch, or learn the embedding using a custom loss
 # TODO: For time/pitch test the effect of bar/octave encoding
@@ -65,3 +66,11 @@ class TimeAndPitchPositionalEncoding(nn.Module):
 
 
 # Vocabulary: Note has an Instrument, and Velocity, and Duration
+
+
+positional_encoding_classes = {
+    "base": BaselinePositionalEncoding,
+    "time": TimePositionalEncoding,
+    "pitch": PitchPositionalEncoding,
+    "time_pitch": TimeAndPitchPositionalEncoding
+}
