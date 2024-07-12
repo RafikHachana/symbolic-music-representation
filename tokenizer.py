@@ -25,7 +25,8 @@ def get_note_position_in_bar(note: pretty_midi.Note, tick: float, previous_downb
 class NoteToken:
     def __init__(self, note: pretty_midi.Note, instrument: int, time_tick: float, previous_downbeat: float):
         self.pitch = note.pitch % 12
-        self.start = get_note_position_in_bar(note, time_tick, previous_downbeat)
+        # TODO: Understand why we get negative values here
+        self.start = max(get_note_position_in_bar(note, time_tick, previous_downbeat), 0)
         self.duration = get_note_duration(note, time_tick)
         self.velocity = note.velocity
         self.instrument = instrument
