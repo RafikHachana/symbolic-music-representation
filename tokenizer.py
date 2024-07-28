@@ -32,6 +32,7 @@ class NoteToken:
         self.instrument = instrument
 
         self.octave = note.pitch // 12
+        self.absolute_start = note.start
         
     # def __eq__(self, other):
     #     return self.pitch == other.pitch and self.position_in_bar == other.position_in_bar
@@ -64,5 +65,7 @@ def tokenize(midi: pretty_midi.PrettyMIDI):
             result.append(NoteToken(
                 note, track.program, tick, downbeats[current_downbeat_ind]
             ))
+
+    result.sort(key=lambda x: (x.absolute_start, x.octave, x.pitch, x.instrument))
 
     return result
