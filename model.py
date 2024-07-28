@@ -11,6 +11,7 @@ from config import DATASET_PATH
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 import wandb
 from position_encoding import positional_encoding_classes
+from datetime import datetime
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -87,10 +88,14 @@ class TransformerModel(pl.LightningModule):
         logits = self(input_ids, tgt_input, tgt_mask=tgt_mask, src_key_padding_mask=(attention_mask == 0))
         # Compute and backpropagate loss for each head separately
         total_loss = 0
-        for logit, tgt in zip(logits, tgt_output):
+
+        loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
+        for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
             self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
+
+            self.log(f"{loss_names[ind]}_train_loss", loss.item())
 
         # Average the total loss
         avg_loss = total_loss / len(logits)
@@ -125,13 +130,13 @@ if __name__ == '__main__':
     # Parse the arguments
     args = parser.parse_args()
 
-    wandb_logger = WandbLogger(project='symbolic_music_representation')
+    wandb_logger = WandbLogger(project='symbolic_music_representation', name=f"base-{datetime.now().strftime('%d-%m@%H:%M')}")
     try:
-        wandb_logger.experiment.config["batch_size"] = 48
+        wandb_logger.experiment.config["batch_size"] = 64
         max_length = 64
         # dataset = TransformerDataset(texts, tokenizer, max_length)
         dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length, piano_only=True)
-        dataloader = DataLoader(dataset, batch_size=48, collate_fn=collate_fn)
+        dataloader = DataLoader(dataset, batch_size=64, collate_fn=collate_fn, num_workers=19)
 
         vocab_size = 12
         d_model = 512
@@ -139,12 +144,12 @@ if __name__ == '__main__':
         num_encoder_layers = 6
         num_decoder_layers = 6
         dim_feedforward = 2048
-        lr = 1e-4
+        lr = 1e-8
 
         # TODO: Get these valuesfrom pytorch_lightning.loggers import WandbLogger
         pitch_vocab_size = 12
-        time_vocab_size = 56000
-        duration_vocab_size = 8000
+        time_vocab_size = 1000
+        duration_vocab_size = 1000
         velocity_vocab_size = 129
         instrument_vocab_size = 129
 
@@ -152,7 +157,8 @@ if __name__ == '__main__':
                                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base")
         # logger = TensorBoardLogger('tb_logs', name='my_model')
 
-        
+        # For topology and gradients
+        wandb_logger.watch(model)
         trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger)
         trainer.fit(model, dataloader)
     except KeyboardInterrupt:

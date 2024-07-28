@@ -47,6 +47,7 @@ def validate_sorting(song):
 
     
 def collate_fn(batch):
+    #  TODO: Add padding here
     input_ids = torch.stack([item['input_ids'] for item in batch])
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
@@ -68,7 +69,7 @@ def safe_parse_midi(path):
         return None
 
 class MIDIRepresentationDataset(Dataset):
-    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False) -> None:
+    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False, padding=False) -> None:
         super().__init__()
 
         # self.songs = [
@@ -79,10 +80,11 @@ class MIDIRepresentationDataset(Dataset):
         self.songs = []
         self.note_octaves = []
         print(f"Found {len(midi_file_paths)} total paths")
+        clipped_start_or_duration = 0
         with ThreadPoolExecutor(max_workers=50) as executor:
-            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths[:1000]]
+            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths[:10000]]
 
-            for f in tqdm(as_completed(futures), total=len(midi_file_paths[:1000])):
+            for f in tqdm(as_completed(futures), total=len(midi_file_paths[:10000])):
                 parsed_midi = f.result()
                 if parsed_midi is None:
                     continue
@@ -92,12 +94,26 @@ class MIDIRepresentationDataset(Dataset):
                     # Skip if we want a piano dataset and the song does not contain piano
                     if not len(parsed_midi):
                         continue
+
+                # TODO: Remove when we use padding
+                if len(parsed_midi) < max_length:
+                    continue
+
+                # TODO: This is also a temporary solution until we have bins
+                for x in parsed_midi:
+                    if x.note > 1000:
+                        x.note = 1000
+                        clipped_start_or_duration+=1
+                    if x.duration > 1000:
+                        x.duration = 1000
+                        clipped_start_or_duration+=1
                 self.songs.append([x.to_vector() for x in parsed_midi])
                 self.note_octaves.append([x.octave for x in parsed_midi])
         # for path in tqdm(midi_file_paths):
         #     parsed_midi = safe_parse_midi(path)
 
         print("Total tokens including INF", sum([len(x) for x in self.songs]))
+        print("Tokens with clipped Start or Duration", clipped_start_or_duration)
 
         # Filter out the INF start and duration
         for i in range(len(self.songs)):
