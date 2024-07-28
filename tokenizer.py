@@ -31,6 +31,8 @@ class NoteToken:
         self.velocity = note.velocity
         self.instrument = instrument
 
+        self.octave = note.pitch // 12
+        
     # def __eq__(self, other):
     #     return self.pitch == other.pitch and self.position_in_bar == other.position_in_bar
 

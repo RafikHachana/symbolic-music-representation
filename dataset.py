@@ -35,6 +35,7 @@ class MIDIRepresentationDataset(Dataset):
         # ]
 
         self.songs = []
+        self.note_octaves = []
         print(f"Found {len(midi_file_paths)} total paths")
         for path in tqdm(midi_file_paths[:100]):
             parsed_midi = safe_parse_midi(path)
@@ -42,6 +43,7 @@ class MIDIRepresentationDataset(Dataset):
                 continue
 
             self.songs.append([x.to_vector() for x in parsed_midi])
+            self.note_octaves.append([x.octave for x in parsed_midi])
 
 
 
