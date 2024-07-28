@@ -68,7 +68,7 @@ def safe_parse_midi(path):
         return None
 
 class MIDIRepresentationDataset(Dataset):
-    def __init__(self, midi_file_paths: List[str], max_length: int) -> None:
+    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False) -> None:
         super().__init__()
 
         # self.songs = [
@@ -80,13 +80,18 @@ class MIDIRepresentationDataset(Dataset):
         self.note_octaves = []
         print(f"Found {len(midi_file_paths)} total paths")
         with ThreadPoolExecutor(max_workers=50) as executor:
-            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths[:200]]
+            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths[:1000]]
 
-            for f in tqdm(as_completed(futures), total=len(midi_file_paths[:200])):
+            for f in tqdm(as_completed(futures), total=len(midi_file_paths[:1000])):
                 parsed_midi = f.result()
                 if parsed_midi is None:
                     continue
 
+                if piano_only:
+                    parsed_midi = [x for x in parsed_midi if x.instrument == 0]
+                    # Skip if we want a piano dataset and the song does not contain piano
+                    if not len(parsed_midi):
+                        continue
                 self.songs.append([x.to_vector() for x in parsed_midi])
                 self.note_octaves.append([x.octave for x in parsed_midi])
         # for path in tqdm(midi_file_paths):

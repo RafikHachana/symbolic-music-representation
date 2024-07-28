@@ -130,7 +130,7 @@ if __name__ == '__main__':
         wandb_logger.experiment.config["batch_size"] = 48
         max_length = 64
         # dataset = TransformerDataset(texts, tokenizer, max_length)
-        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length)
+        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length, piano_only=True)
         dataloader = DataLoader(dataset, batch_size=48, collate_fn=collate_fn)
 
         vocab_size = 12
