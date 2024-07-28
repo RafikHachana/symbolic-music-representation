@@ -9,6 +9,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
+import wandb
 from position_encoding import positional_encoding_classes
 
 class TransformerModel(pl.LightningModule):
@@ -125,31 +126,34 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     wandb_logger = WandbLogger(project='symbolic_music_representation')
-    wandb_logger.experiment.config["batch_size"] = 48
-    max_length = 64
-    # dataset = TransformerDataset(texts, tokenizer, max_length)
-    dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length)
-    dataloader = DataLoader(dataset, batch_size=48, collate_fn=collate_fn)
+    try:
+        wandb_logger.experiment.config["batch_size"] = 48
+        max_length = 64
+        # dataset = TransformerDataset(texts, tokenizer, max_length)
+        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length)
+        dataloader = DataLoader(dataset, batch_size=48, collate_fn=collate_fn)
 
-    vocab_size = 12
-    d_model = 512
-    nhead = 8
-    num_encoder_layers = 6
-    num_decoder_layers = 6
-    dim_feedforward = 2048
-    lr = 1e-4
+        vocab_size = 12
+        d_model = 512
+        nhead = 8
+        num_encoder_layers = 6
+        num_decoder_layers = 6
+        dim_feedforward = 2048
+        lr = 1e-4
 
-    # TODO: Get these valuesfrom pytorch_lightning.loggers import WandbLogger
-    pitch_vocab_size = 12
-    time_vocab_size = 56000
-    duration_vocab_size = 8000
-    velocity_vocab_size = 129
-    instrument_vocab_size = 129
+        # TODO: Get these valuesfrom pytorch_lightning.loggers import WandbLogger
+        pitch_vocab_size = 12
+        time_vocab_size = 56000
+        duration_vocab_size = 8000
+        velocity_vocab_size = 129
+        instrument_vocab_size = 129
 
-    model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                             d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base")
-    # logger = TensorBoardLogger('tb_logs', name='my_model')
+        model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
+                                d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base")
+        # logger = TensorBoardLogger('tb_logs', name='my_model')
 
-    
-    trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger)
-    trainer.fit(model, dataloader)
+        
+        trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger)
+        trainer.fit(model, dataloader)
+    except KeyboardInterrupt:
+        wandb.finish()
