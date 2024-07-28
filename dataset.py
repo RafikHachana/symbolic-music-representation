@@ -82,9 +82,9 @@ class MIDIRepresentationDataset(Dataset):
         print(f"Found {len(midi_file_paths)} total paths")
         clipped_start_or_duration = 0
         with ThreadPoolExecutor(max_workers=50) as executor:
-            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths[:10000]]
+            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths]
 
-            for f in tqdm(as_completed(futures), total=len(midi_file_paths[:10000])):
+            for f in tqdm(as_completed(futures), total=len(midi_file_paths)):
                 parsed_midi = f.result()
                 if parsed_midi is None:
                     continue
@@ -101,8 +101,8 @@ class MIDIRepresentationDataset(Dataset):
 
                 # TODO: This is also a temporary solution until we have bins
                 for x in parsed_midi:
-                    if x.note > 1000:
-                        x.note = 1000
+                    if x.start > 1000:
+                        x.start = 1000
                         clipped_start_or_duration+=1
                     if x.duration > 1000:
                         x.duration = 1000

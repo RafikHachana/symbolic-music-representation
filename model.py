@@ -148,8 +148,8 @@ if __name__ == '__main__':
 
         # TODO: Get these valuesfrom pytorch_lightning.loggers import WandbLogger
         pitch_vocab_size = 12
-        time_vocab_size = 1000
-        duration_vocab_size = 1000
+        time_vocab_size = 1001
+        duration_vocab_size = 1001
         velocity_vocab_size = 129
         instrument_vocab_size = 129
 
