@@ -2,3 +2,4 @@ venv
 lightning_logs
 __pycache__
 tb_logs
+dataset

@@ -1,3 +1,3 @@
 import os
 
-DATASET_PATH = os.getenv("DATASET_PATH") or "/home/rafik/Downloads/clean_midi"
+DATASET_PATH = os.getenv("DATASET_PATH") or os.path.expandvars("$PWD/dataset")
