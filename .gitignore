@@ -4,3 +4,5 @@ __pycache__
 tb_logs
 dataset
 wandb
+data.tmp
+*.tmp
