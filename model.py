@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 # from transformers import BertTokenizer, BertModel
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
-from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
+from logger import wandb_logger
 import wandb
 from position_encoding import positional_encoding_classes
 from datetime import datetime
@@ -75,6 +75,7 @@ class TransformerModel(pl.LightningModule):
         ]
 
     def training_step(self, batch, batch_idx):
+        opt = self.optimizers()
         input_ids = batch['input_ids'][:, :-1]
         attention_mask = batch['attention_mask'][:, :-1]
         labels = batch['labels']
@@ -90,12 +91,14 @@ class TransformerModel(pl.LightningModule):
         total_loss = 0
 
         loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
+        opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
             self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
 
             self.log(f"{loss_names[ind]}_train_loss", loss.item())
+        opt.step()
 
         # Average the total loss
         avg_loss = total_loss / len(logits)
@@ -121,22 +124,39 @@ if __name__ == '__main__':
     #     type=str
     # )
     parser.add_argument(
+        '--positional-encoding',
         '-pe',
         choices=['base', 'time', 'pitch', 'pitch_time'],
         help="Specify the type of positional encoding to use (short form).",
-        metavar='positional_encoding'
+        default="base"
     )
 
+    parser.add_argument(
+        '--max-sequence-length',
+        '-maxlen',
+        type=int,
+        help="Maximum sequence length used for training",
+        default=256
+    )
+
+
+    parser.add_argument(
+        '--batch-size',
+        '-b',
+        type=int,
+        help="Training batch size",
+        default=64
+    )
     # Parse the arguments
     args = parser.parse_args()
 
-    wandb_logger = WandbLogger(project='symbolic_music_representation', name=f"base-{datetime.now().strftime('%d-%m@%H:%M')}")
+    BATCH_SIZE = args.batch_size
+
     try:
-        wandb_logger.experiment.config["batch_size"] = 64
-        max_length = 64
-        # dataset = TransformerDataset(texts, tokenizer, max_length)
-        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=max_length, piano_only=True)
-        dataloader = DataLoader(dataset, batch_size=64, collate_fn=collate_fn, num_workers=19)
+        wandb_logger.experiment.config["batch_size"] = BATCH_SIZE
+        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=args.max_sequence_length, piano_only=True)
+        wandb_logger.experiment.config["train_dataset_instances"] = len(dataset)
+        dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, collate_fn=collate_fn, num_workers=19)
 
         vocab_size = 12
         d_model = 512
@@ -146,15 +166,15 @@ if __name__ == '__main__':
         dim_feedforward = 2048
         lr = 1e-8
 
-        # TODO: Get these valuesfrom pytorch_lightning.loggers import WandbLogger
-        pitch_vocab_size = 12
-        time_vocab_size = 1001
-        duration_vocab_size = 1001
+        # TODO: Get these values
+        pitch_vocab_size = 13
+        time_vocab_size = 1002
+        duration_vocab_size = 1007
         velocity_vocab_size = 129
         instrument_vocab_size = 129
 
         model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                                d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base")
+                                d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, args.max_sequence_length, lr, positional_encoding=args.positional_encoding)
         # logger = TensorBoardLogger('tb_logs', name='my_model')
 
         # For topology and gradients
