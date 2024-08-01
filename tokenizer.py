@@ -44,13 +44,19 @@ class NoteToken:
         return f"Pitch: {self.pitch}, Position in bar: {self.start}, Duration: {self.duration}, Velocity: {self.velocity}, Instr: {self.instrument}"
     
     def to_vector(self):
+        # Shift values by one to account for padding tokens with 0
         return np.array([
-            self.pitch,
-            self.start,
-            self.duration,
-            self.velocity,
-            self.instrument
+            self.pitch+1,
+            self.start+1,
+            self.duration+1,
+            self.velocity+1,
+            self.instrument+1
         ])
+
+    @classmethod
+    def pad_token(cls):
+        return np.array([0]*5)
+
     
 def tokenize(midi: pretty_midi.PrettyMIDI):
     result = []
