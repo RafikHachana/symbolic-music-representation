@@ -75,6 +75,7 @@ class TransformerModel(pl.LightningModule):
         ]
 
     def training_step(self, batch, batch_idx):
+        # torch.autograd.set_detect_anomaly(True)
         opt = self.optimizers()
         input_ids = batch['input_ids'][:, :-1]
         attention_mask = batch['attention_mask'][:, :-1]
@@ -86,7 +87,10 @@ class TransformerModel(pl.LightningModule):
 
         tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
-        logits = self(input_ids, tgt_input, tgt_mask=tgt_mask, src_key_padding_mask=(attention_mask == 0))
+        logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
+         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).float(), 
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).float()
+         )
         # Compute and backpropagate loss for each head separately
         total_loss = 0
 
@@ -94,10 +98,14 @@ class TransformerModel(pl.LightningModule):
         opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
-            self.manual_backward(loss, retain_graph=True)
+            
+            # print("Loss", loss.item())
+            self.manual_backward(loss, retain_graph=ind < (len(logits) - 1))
             total_loss += loss.item()
 
             self.log(f"{loss_names[ind]}_train_loss", loss.item())
+        
+        nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         opt.step()
 
         # Average the total loss
@@ -139,18 +147,23 @@ if __name__ == '__main__':
         default=256
     )
 
-
-    parser.add_argument(
+    grp = parser.add_argument_group('batch_size').add_mutually_exclusive_group()
+    grp.add_argument(
         '--batch-size',
         '-b',
         type=int,
         help="Training batch size",
         default=64
     )
+    grp.add_argument(
+        '--batch-size-auto',
+        '-bauto',
+        action="store_true"
+    )
     # Parse the arguments
     args = parser.parse_args()
 
-    BATCH_SIZE = args.batch_size
+    BATCH_SIZE = args.batch_size if not args.batch_size_auto else 4
 
     try:
         wandb_logger.experiment.config["batch_size"] = BATCH_SIZE
@@ -164,7 +177,7 @@ if __name__ == '__main__':
         num_encoder_layers = 6
         num_decoder_layers = 6
         dim_feedforward = 2048
-        lr = 1e-8
+        lr = 1e-7
 
         # TODO: Get these values
         pitch_vocab_size = 13
