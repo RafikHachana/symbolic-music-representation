@@ -114,6 +114,39 @@ class TransformerModel(pl.LightningModule):
         # print("Loss", avg_loss)
         return torch.tensor(avg_loss)
 
+    def validation_step(self, batch, batch_idx):
+        # torch.autograd.set_detect_anomaly(True)
+        # TODO: Use some common function for training and validation to avoid code duplication
+        input_ids = batch['input_ids'][:, :-1]
+        attention_mask = batch['attention_mask'][:, :-1]
+        labels = batch['labels']
+
+        tgt_input = labels[:, :-1]
+        tgt_output = [labels[:, 1:, x] for x in range(5)]
+
+
+        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
+
+        logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
+         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).float(), 
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).float()
+         )
+
+        # Compute loss for each head separately
+        total_loss = 0
+        loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
+        for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
+            loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
+            total_loss += loss.item()
+            self.log(f"{loss_names[ind]}_validation_loss", loss.item())
+        
+
+        # Average the total loss
+        avg_loss = total_loss / len(logits)
+        self.log('validation_loss', avg_loss)
+        # print("Loss", avg_loss)
+        return torch.tensor(avg_loss)
+
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr)
         return optimizer
@@ -168,8 +201,19 @@ if __name__ == '__main__':
     try:
         wandb_logger.experiment.config["batch_size"] = BATCH_SIZE
         dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=args.max_sequence_length, piano_only=True)
-        wandb_logger.experiment.config["train_dataset_instances"] = len(dataset)
-        dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, collate_fn=collate_fn, num_workers=19)
+
+        # use 20% of training data for validation
+        train_set_size = int(len(dataset) * 0.8)
+        valid_set_size = len(dataset) - train_set_size
+
+        # split the train set into two
+        seed = torch.Generator().manual_seed(42)
+        train_set, valid_set = torch.utils.data.random_split(dataset, [train_set_size, valid_set_size], generator=seed)
+        wandb_logger.experiment.config["train_dataset_instances"] = len(train_set)
+        wandb_logger.experiment.config["valid_dataset_instances"] = len(valid_set)
+
+        train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, collate_fn=collate_fn, num_workers=19)
+        valid_loader = DataLoader(valid_set, batch_size=2, collate_fn=collate_fn, num_workers=19)
 
         vocab_size = 12
         d_model = 512
@@ -192,7 +236,13 @@ if __name__ == '__main__':
 
         # For topology and gradients
         wandb_logger.watch(model)
-        trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger)
-        trainer.fit(model, dataloader)
+        trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger,
+        # auto_scale_batch_size='binsearch' if args.batch_size_auto else None
+        check_val_every_n_epoch=1,
+        fast_dev_run=False
+        )
+        # TODO: Tune this but make the batch size and train loader part of the model
+        # trainer.tune(model)
+        trainer.fit(model, train_loader, valid_loader)
     except KeyboardInterrupt:
         wandb.finish()
