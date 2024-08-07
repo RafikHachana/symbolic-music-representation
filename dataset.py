@@ -93,7 +93,7 @@ class MIDIRepresentationDataset(Dataset):
         with ThreadPoolExecutor(max_workers=50) as executor:
             futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths]
 
-            for ind, f in enumerate(tqdm(as_completed(futures), total=len(midi_file_paths))):
+            for f in tqdm(as_completed(futures), total=len(midi_file_paths)):
                 parsed_midi = f.result()
                 if parsed_midi is None:
                     continue
@@ -116,6 +116,9 @@ class MIDIRepresentationDataset(Dataset):
 
                 song = [x.to_vector() for x in parsed_midi]
 
+                # Degenerate dataset instance, skip
+                if not len(song):
+                    continue
                 non_clipped_song_length = len(song)
                 song = song[:self.max_length]
                 original_song_length = len(song)
@@ -130,10 +133,11 @@ class MIDIRepresentationDataset(Dataset):
                     np.zeros(self.max_length - original_song_length)
                 )
 
-                self.songs[ind, :, :] = song
+                self.songs[self.n_instances, :, :] = song
+                self.note_octaves[self.n_instances, :] = octaves
+                self.attention_masks[self.n_instances, :] = attention_mask
+
                 self.n_instances += 1
-                self.note_octaves[ind, :] = octaves
-                self.attention_masks[ind, :] = attention_mask
         # for path in tqdm(midi_file_paths):
         #     parsed_midi = safe_parse_midi(path)
         print("Number of instances", self.n_instances)
@@ -160,6 +164,9 @@ class MIDIRepresentationDataset(Dataset):
         print("Max velocity", max([max([note[3] for note in song]) for song in self.songs[:self.n_instances]]))
         print("Max instrument", max([max([note[4] for note in song]) for song in self.songs[:self.n_instances]]))
         print("Min length", min([len(x) for x in self.songs[:self.n_instances]]))
+
+        assert not np.isnan(np.sum(self.songs[:self.n_instances])), "Some songs have NaN!"
+        assert not np.any(np.isinf(self.songs[:self.n_instances])), "Some songs have Inf!"
 
         self._log_dataset_metadata()
 

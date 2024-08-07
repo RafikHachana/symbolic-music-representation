@@ -88,8 +88,8 @@ class TransformerModel(pl.LightningModule):
         tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
         logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
-         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).float(), 
-         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).float()
+         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool()
          )
         # Compute and backpropagate loss for each head separately
         total_loss = 0
@@ -98,7 +98,6 @@ class TransformerModel(pl.LightningModule):
         opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
-            
             # print("Loss", loss.item())
             self.manual_backward(loss, retain_graph=ind < (len(logits) - 1))
             total_loss += loss.item()
@@ -128,8 +127,8 @@ class TransformerModel(pl.LightningModule):
         tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
         logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
-         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).float(), 
-         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).float()
+         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool()
          )
 
         # Compute loss for each head separately
