@@ -31,13 +31,26 @@ class TransformerModel(pl.LightningModule):
             raise ValueError(f"positional_encoding should be one of {list(positional_encoding_classes.keys())}")
         self.positional_encoding = positional_encoding_classes[positional_encoding](d_model, max_length)
 
-
-        self.transformer = nn.Transformer(
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
-            num_encoder_layers=num_encoder_layers,
-            num_decoder_layers=num_decoder_layers,
-            dim_feedforward=dim_feedforward,
+            dim_feedforward=dim_feedforward
+        )
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward
+        )
+
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_encoder_layers
+        )
+
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=num_decoder_layers
         )
 
         self.pitch_pred = nn.Linear(d_model, pitch_vocab_size)
@@ -79,13 +92,21 @@ class TransformerModel(pl.LightningModule):
         # + self.positional_encoding[:, :src.size(1), :]
         # tgt_emb = self.embedding(tgt) + self.positional_encoding[:, :tgt.size(1), :]
 
-        output = self.transformer(
-            src_emb.transpose(0, 1),
-            tgt_emb.transpose(0, 1),
-            src_mask=src_mask,
-            tgt_mask=tgt_mask,
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask
+        memory = self.encoder(
+            src_emb.transpose(0, 1), 
+            src_mask=src_mask, 
+            src_key_padding_mask=src_key_padding_mask
+        )
+
+        #  TODO: CBM here
+
+        output = self.decoder(
+            tgt_emb.transpose(0, 1), 
+            memory,
+            tgt_mask=tgt_mask, 
+            memory_mask=src_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=src_key_padding_mask
         )
 
         return [    # pitch, start, duration, velocity, instrument
