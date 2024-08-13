@@ -13,7 +13,7 @@ import os
 import sys
 from config import DATASET_PATH
 import wandb
-from logger import wandb_logger
+import gc
 
 
 def get_file_paths(dataset_path):
@@ -54,7 +54,9 @@ def collate_fn(batch):
     input_ids = torch.stack([item['input_ids'] for item in batch])
     attention_mask = torch.stack([item['attention_mask'] for item in batch])
     labels = torch.stack([item['labels'] for item in batch])
-    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels}
+    octaves = torch.stack([item['octaves'] for item in batch])
+    absolute_start = torch.stack([item['absolute_start'] for item in batch])
+    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels, 'octaves': octaves, 'absolute_start': absolute_start}
 
 def safe_parse_midi(path):
     try:
@@ -72,7 +74,7 @@ def safe_parse_midi(path):
         return None
 
 class MIDIRepresentationDataset(Dataset):
-    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False, padding=False) -> None:
+    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False, padding=False, wandb_logger=None) -> None:
         super().__init__()
         self.max_length = max_length
 
@@ -82,10 +84,13 @@ class MIDIRepresentationDataset(Dataset):
         #     for path in tqdm(midi_file_paths[:50])
         # ]
 
-        # midi_file_paths = midi_file_paths[:100]
+        self.wandb_logger = wandb_logger
+
+        # midi_file_paths = midi_file_paths[:400]
 
         self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, 5), mode="w+", dtype=np.uint16)
         self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
+        self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
         self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
         self.song_lengths = []
         print(f"Found {len(midi_file_paths)} total paths")
@@ -128,6 +133,10 @@ class MIDIRepresentationDataset(Dataset):
                 octaves = [x.octave for x in parsed_midi][:self.max_length]
                 octaves += [-1]*(self.max_length - len(octaves))
 
+                absolute_starts = [x.absolute_start for x in parsed_midi][:self.max_length]
+                absolute_starts += [-1]*(self.max_length - len(absolute_starts))
+
+
                 attention_mask = np.append(
                     np.ones(original_song_length),
                     np.zeros(self.max_length - original_song_length)
@@ -135,9 +144,12 @@ class MIDIRepresentationDataset(Dataset):
 
                 self.songs[self.n_instances, :, :] = song
                 self.note_octaves[self.n_instances, :] = octaves
+                self.note_absolute_start[self.n_instances, :] = absolute_starts
                 self.attention_masks[self.n_instances, :] = attention_mask
 
                 self.n_instances += 1
+
+                gc.collect()
         # for path in tqdm(midi_file_paths):
         #     parsed_midi = safe_parse_midi(path)
         print("Number of instances", self.n_instances)
@@ -158,22 +170,23 @@ class MIDIRepresentationDataset(Dataset):
         #     print("Instrument", instr-1, "used in ", count, "songs")
         print()
         
-        print("Max pitch", max([max([note[0] for note in song]) for song in self.songs[:self.n_instances]]))
-        print("Max start", max([max([note[1] for note in song]) for song in self.songs[:self.n_instances]]))
-        print("Max duration", max([max([note[2] for note in song]) for song in self.songs[:self.n_instances]]))
-        print("Max velocity", max([max([note[3] for note in song]) for song in self.songs[:self.n_instances]]))
-        print("Max instrument", max([max([note[4] for note in song]) for song in self.songs[:self.n_instances]]))
-        print("Min length", min([len(x) for x in self.songs[:self.n_instances]]))
+        # print("Max pitch", max([max([note[0] for note in song]) for song in self.songs[:self.n_instances]]))
+        # print("Max start", max([max([note[1] for note in song]) for song in self.songs[:self.n_instances]]))
+        # print("Max duration", max([max([note[2] for note in song]) for song in self.songs[:self.n_instances]]))
+        # print("Max velocity", max([max([note[3] for note in song]) for song in self.songs[:self.n_instances]]))
+        # print("Max instrument", max([max([note[4] for note in song]) for song in self.songs[:self.n_instances]]))
+        # print("Min length", min([len(x) for x in self.songs[:self.n_instances]]))
 
         assert not np.isnan(np.sum(self.songs[:self.n_instances])), "Some songs have NaN!"
         assert not np.any(np.isinf(self.songs[:self.n_instances])), "Some songs have Inf!"
 
-        self._log_dataset_metadata()
+        if self.wandb_logger is not None:
+            self._log_dataset_metadata()
 
     def _log_dataset_metadata(self):
         # Log the original song lengths
         table = wandb.Table(data=[[x] for x in self.song_lengths], columns=["song_length"])
-        wandb_logger.experiment.log({'song_length': wandb.plot.histogram(table, "song_length",
+        self.wandb_logger.experiment.log({'song_length': wandb.plot.histogram(table, "song_length",
                 title="Song Length")})
 
 
@@ -182,7 +195,13 @@ class MIDIRepresentationDataset(Dataset):
 
     def __getitem__(self, index) -> torch.Tensor:
         input_ids = torch.tensor(self.songs[index]).long()
-        return {'input_ids': input_ids, 'attention_mask': torch.tensor(self.attention_masks[index]).long(), 'labels': input_ids.clone()}
+        return {
+            'input_ids': input_ids,
+            'attention_mask': torch.tensor(self.attention_masks[index]).long(),
+            'labels': input_ids.clone(),
+            'octaves': torch.tensor(self.note_octaves[index]).long(),
+            'absolute_start': torch.tensor(self.note_absolute_start[index]).long()
+        }
 
     def __del__(self):
         self.songs._mmap.close()

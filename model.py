@@ -8,7 +8,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 # from transformers import BertTokenizer, BertModel
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
-from logger import wandb_logger
+from datetime import datetime
+from pytorch_lightning.loggers import WandbLogger
 import wandb
 from position_encoding import positional_encoding_classes
 from datetime import datetime
@@ -49,11 +50,32 @@ class TransformerModel(pl.LightningModule):
 
         self.automatic_optimization = False
 
-    def forward(self, src, tgt, src_mask=None, tgt_mask=None, src_key_padding_mask=None, tgt_key_padding_mask=None):
+    def forward(self, src, tgt,
+                src_mask=None,
+                tgt_mask=None,
+                src_key_padding_mask=None,
+                tgt_key_padding_mask=None,
+                octaves_src=None,
+                octaves_tgt=None,
+                absolute_start_src=None,
+                absolute_start_tgt=None
+                ):
         # print("Min start", torch.min(src[:, :, 1]))
         # print(src[:, :, 1])
-        src_emb = self.pitch_embedding(src[:, :, 0]) + self.start_embedding(src[:, :, 1]) + self.duration_embedding(src[:, :, 2]) + self.velocity_embedding(src[:, :, 3]) + self.instrument_embedding(src[:, :, 4]) + self.positional_encoding(src)
-        tgt_emb = self.pitch_embedding(tgt[:, :, 0]) + self.start_embedding(tgt[:, :, 1]) + self.duration_embedding(tgt[:, :, 2]) + self.velocity_embedding(tgt[:, :, 3]) + self.instrument_embedding(tgt[:, :, 4]) + self.positional_encoding(tgt)
+
+        pos_encoding_input_src = {
+            "x": src,
+            "time": absolute_start_src,
+            "octave": octaves_src
+        }
+
+        pos_encoding_input_tgt = {
+            "x": tgt,
+            "time": absolute_start_tgt,
+            "octave": octaves_tgt
+        }
+        src_emb = self.pitch_embedding(src[:, :, 0]) + self.start_embedding(src[:, :, 1]) + self.duration_embedding(src[:, :, 2]) + self.velocity_embedding(src[:, :, 3]) + self.instrument_embedding(src[:, :, 4]) + self.positional_encoding(pos_encoding_input_src)
+        tgt_emb = self.pitch_embedding(tgt[:, :, 0]) + self.start_embedding(tgt[:, :, 1]) + self.duration_embedding(tgt[:, :, 2]) + self.velocity_embedding(tgt[:, :, 3]) + self.instrument_embedding(tgt[:, :, 4]) + self.positional_encoding(pos_encoding_input_tgt)
         # + self.positional_encoding[:, :src.size(1), :]
         # tgt_emb = self.embedding(tgt) + self.positional_encoding[:, :tgt.size(1), :]
 
@@ -89,7 +111,11 @@ class TransformerModel(pl.LightningModule):
 
         logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
          src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
-         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool()
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool(),
+         absolute_start_src=batch['absolute_start'][:, :-1],
+         absolute_start_tgt=batch['absolute_start'][:, 1:],
+         octaves_src=batch['octaves'][:, :-1],
+         octaves_tgt=batch['octaves'][:, 1:]
          )
         # Compute and backpropagate loss for each head separately
         total_loss = 0
@@ -128,7 +154,11 @@ class TransformerModel(pl.LightningModule):
 
         logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
          src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
-         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool()
+         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool(),
+         absolute_start_src=batch['absolute_start'][:, :-1],
+         absolute_start_tgt=batch['absolute_start'][:, 1:],
+         octaves_src=batch['octaves'][:, :-1],
+         octaves_tgt=batch['octaves'][:, 1:]
          )
 
         # Compute loss for each head separately
@@ -166,7 +196,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--positional-encoding',
         '-pe',
-        choices=['base', 'time', 'pitch', 'pitch_time'],
+        choices=positional_encoding_classes.keys(),
         help="Specify the type of positional encoding to use (short form).",
         default="base"
     )
@@ -197,9 +227,14 @@ if __name__ == '__main__':
 
     BATCH_SIZE = args.batch_size if not args.batch_size_auto else 4
 
+
+
+
+    wandb_logger = WandbLogger(project='symbolic_music_representation', name=f"{args.positional_encoding}-{datetime.now().strftime('%d-%m@%H:%M')}")
+
     try:
         wandb_logger.experiment.config["batch_size"] = BATCH_SIZE
-        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=args.max_sequence_length, piano_only=True)
+        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=args.max_sequence_length, piano_only=True, wandb_logger=wandb_logger)
 
         # use 20% of training data for validation
         train_set_size = int(len(dataset) * 0.8)
