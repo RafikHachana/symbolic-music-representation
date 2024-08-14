@@ -14,6 +14,7 @@ import wandb
 from position_encoding import positional_encoding_classes
 from datetime import datetime
 from concepts import CONCEPTS
+import torch.nn.functional as F
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -68,6 +69,12 @@ class TransformerModel(pl.LightningModule):
         if use_concepts:
             self.concept_predictors = nn.ModuleList([nn.Linear(d_model, 1) for _ in range(len(CONCEPTS))])
             self.concept_criterion = nn.MSELoss()
+
+    def _calculate_accuracy(self, logits, targets):
+        predictions = torch.argmax(logits, dim=-1)
+        correct = (predictions == targets).float()
+        accuracy = correct.sum() / targets.numel()
+        return accuracy
 
     def forward(self, src, tgt,
                 src_mask=None,
@@ -154,15 +161,20 @@ class TransformerModel(pl.LightningModule):
          )
         # Compute and backpropagate loss for each head separately
         total_loss = 0
+        total_acc = 0
 
         loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
-        opt.zero_grad()
+        if mode == "train": opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
             if mode == "train": self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
 
             self.log(f"{loss_names[ind]}_{mode}_loss", loss.item())
+            if mode == "val":
+                accuracy = self._calculate_accuracy(logit, tgt)
+                self.log(f"{loss_names[ind]}_{mode}_accuracy", accuracy)
+                total_acc += accuracy
 
         if self.use_concepts:
             total_concept_loss = 0
@@ -182,6 +194,10 @@ class TransformerModel(pl.LightningModule):
         # Average the total loss
         avg_loss = total_loss / len(logits)
         self.log(f'{mode}_loss', avg_loss)
+
+        if mode == "val":
+            avg_acc = total_acc / len(logits)
+            self.log(f'{mode}_accuracy', avg_acc)
         return torch.tensor(avg_loss)
 
     def validation_step(self, batch, batch_idx):
@@ -190,6 +206,63 @@ class TransformerModel(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr)
         return optimizer
+
+
+    def generate_song(self, conditioning_sequence, max_gen_length=512, temperature=1.0):
+        """
+        Generate a song autoregressively given a conditioning song sequence.
+
+        Args:
+            conditioning_sequence (torch.Tensor): The input conditioning sequence of shape (1, seq_len, feature_dim).
+            max_gen_length (int): The maximum length of the generated song sequence.
+            temperature (float): Sampling temperature for diversity in predictions.
+
+        Returns:
+            generated_sequence (torch.Tensor): The generated song sequence of shape (1, max_gen_length, feature_dim).
+        """
+        self.eval()  # Set model to evaluation mode
+        generated_sequence = conditioning_sequence.clone()
+
+        for _ in range(max_gen_length - conditioning_sequence.size(1)):
+            tgt_input = generated_sequence[:, -1:, :]  # Take the last token
+            tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
+
+            with torch.no_grad():
+                logits, _ = self(
+                    src=conditioning_sequence,
+                    tgt=tgt_input,
+                    tgt_mask=tgt_mask,
+                    src_key_padding_mask=None,
+                    tgt_key_padding_mask=None,
+                    absolute_start_src=None,
+                    absolute_start_tgt=None,
+                    octaves_src=None,
+                    octaves_tgt=None
+                )
+
+            # Extract the logits for the last token
+            pitch_logits, start_logits, duration_logits, velocity_logits, instrument_logits = [
+                logit[:, -1, :] / temperature for logit in logits
+            ]
+
+            # Sample from the distribution
+            pitch_pred = torch.multinomial(F.softmax(pitch_logits, dim=-1), num_samples=1)
+            start_pred = torch.multinomial(F.softmax(start_logits, dim=-1), num_samples=1)
+            duration_pred = torch.multinomial(F.softmax(duration_logits, dim=-1), num_samples=1)
+            velocity_pred = torch.multinomial(F.softmax(velocity_logits, dim=-1), num_samples=1)
+            instrument_pred = torch.multinomial(F.softmax(instrument_logits, dim=-1), num_samples=1)
+
+            # Concatenate predictions to form the next token
+            next_token = torch.cat([pitch_pred, start_pred, duration_pred, velocity_pred, instrument_pred], dim=-1)
+
+            # Append the next token to the generated sequence
+            generated_sequence = torch.cat([generated_sequence, next_token.unsqueeze(1)], dim=1)
+
+            # Update conditioning sequence to include the newly generated token
+            conditioning_sequence = torch.cat([conditioning_sequence, next_token.unsqueeze(1)], dim=1)
+
+        return generated_sequence
+
 
 
 
