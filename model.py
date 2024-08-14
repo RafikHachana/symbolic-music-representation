@@ -13,10 +13,11 @@ from pytorch_lightning.loggers import WandbLogger
 import wandb
 from position_encoding import positional_encoding_classes
 from datetime import datetime
+from concepts import CONCEPTS
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base"):
+                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base", use_concepts=True):
         super(TransformerModel, self).__init__()
         self.save_hyperparameters()
 
@@ -63,6 +64,11 @@ class TransformerModel(pl.LightningModule):
 
         self.automatic_optimization = False
 
+        self.use_concepts = use_concepts
+        if use_concepts:
+            self.concept_predictors = nn.ModuleList([nn.Linear(d_model, 1) for _ in range(len(CONCEPTS))])
+            self.concept_criterion = nn.MSELoss()
+
     def forward(self, src, tgt,
                 src_mask=None,
                 tgt_mask=None,
@@ -98,7 +104,10 @@ class TransformerModel(pl.LightningModule):
             src_key_padding_mask=src_key_padding_mask
         )
 
-        #  TODO: CBM here
+        #  TODO: Add concept predictions here
+        concept_predictions = []
+        if self.use_concepts:
+            concept_predictions = [predictor(memory) for predictor in self.concept_predictors]
 
         output = self.decoder(
             tgt_emb.transpose(0, 1), 
@@ -109,7 +118,7 @@ class TransformerModel(pl.LightningModule):
             memory_key_padding_mask=src_key_padding_mask
         )
 
-        return [    # pitch, start, duration, velocity, instrument
+        final_output = [    # pitch, start, duration, velocity, instrument
             self.pitch_pred(output),
             self.start_pred(output),
             self.duration_pred(output),
@@ -117,12 +126,17 @@ class TransformerModel(pl.LightningModule):
             self.instrument_pred(output)
         ]
 
+        return final_output, concept_predictions
     def training_step(self, batch, batch_idx):
+        return self._process_batch(batch, batch_idx, 'train')
+
+
+    def _process_batch(self, batch, batch_idx, mode):
         # torch.autograd.set_detect_anomaly(True)
         opt = self.optimizers()
         input_ids = batch['input_ids'][:, :-1]
-        attention_mask = batch['attention_mask'][:, :-1]
         labels = batch['labels']
+        concepts = batch['concepts']
 
         tgt_input = labels[:, :-1]
         tgt_output = [labels[:, 1:, x] for x in range(5)]
@@ -130,7 +144,7 @@ class TransformerModel(pl.LightningModule):
 
         tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
-        logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
+        logits, concept_predictions = self(input_ids, tgt_input, tgt_mask=tgt_mask,
          src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
          tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool(),
          absolute_start_src=batch['absolute_start'][:, :-1],
@@ -145,57 +159,33 @@ class TransformerModel(pl.LightningModule):
         opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
-            # print("Loss", loss.item())
-            self.manual_backward(loss, retain_graph=ind < (len(logits) - 1))
+            if mode == "train": self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
 
-            self.log(f"{loss_names[ind]}_train_loss", loss.item())
-        
-        nn.utils.clip_grad_norm_(self.parameters(), 1.0)
-        opt.step()
+            self.log(f"{loss_names[ind]}_{mode}_loss", loss.item())
+
+        if self.use_concepts:
+            total_concept_loss = 0
+            for ind, concept_description in enumerate(CONCEPTS):
+                concept_groundtruth = concepts[concept_description.field_name]
+                concept_loss = self.concept_criterion(concept_predictions[ind].view(-1), concept_groundtruth.float().view(-1))
+                if mode == "train": self.manual_backward(concept_loss, retain_graph=True)
+                total_concept_loss += concept_loss.item()
+                self.log(f"{concept_description.field_name}_concept_{mode}_loss", concept_loss.item())
+
+            self.log(f"total_concept_{mode}_loss", total_concept_loss / len(CONCEPTS))
+                
+        if mode == "train": 
+            nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+            opt.step()
 
         # Average the total loss
         avg_loss = total_loss / len(logits)
-        self.log('train_loss', avg_loss)
-        # print("Loss", avg_loss)
+        self.log(f'{mode}_loss', avg_loss)
         return torch.tensor(avg_loss)
 
     def validation_step(self, batch, batch_idx):
-        # torch.autograd.set_detect_anomaly(True)
-        # TODO: Use some common function for training and validation to avoid code duplication
-        input_ids = batch['input_ids'][:, :-1]
-        attention_mask = batch['attention_mask'][:, :-1]
-        labels = batch['labels']
-
-        tgt_input = labels[:, :-1]
-        tgt_output = [labels[:, 1:, x] for x in range(5)]
-
-
-        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
-
-        logits = self(input_ids, tgt_input, tgt_mask=tgt_mask,
-         src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
-         tgt_key_padding_mask=(batch['attention_mask'][:, 1:] == 0).bool(),
-         absolute_start_src=batch['absolute_start'][:, :-1],
-         absolute_start_tgt=batch['absolute_start'][:, 1:],
-         octaves_src=batch['octaves'][:, :-1],
-         octaves_tgt=batch['octaves'][:, 1:]
-         )
-
-        # Compute loss for each head separately
-        total_loss = 0
-        loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
-        for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
-            loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
-            total_loss += loss.item()
-            self.log(f"{loss_names[ind]}_validation_loss", loss.item())
-        
-
-        # Average the total loss
-        avg_loss = total_loss / len(logits)
-        self.log('validation_loss', avg_loss)
-        # print("Loss", avg_loss)
-        return torch.tensor(avg_loss)
+        return self._process_batch(batch, batch_idx, 'val')
 
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.lr)

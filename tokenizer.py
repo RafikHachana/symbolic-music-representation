@@ -1,3 +1,4 @@
+from concepts import CONCEPTS
 import numpy as np
 import pretty_midi
 from tqdm import tqdm
@@ -33,6 +34,11 @@ class NoteToken:
 
         self.octave = note.pitch // 12
         self.absolute_start = note.start
+
+        # Can be used to identify the bars
+        self.previous_downbeat = previous_downbeat
+
+        self.concepts = {}
         
     # def __eq__(self, other):
     #     return self.pitch == other.pitch and self.position_in_bar == other.position_in_bar
@@ -52,6 +58,9 @@ class NoteToken:
             self.velocity+1,
             self.instrument+1
         ])
+    
+    def concepts_to_vector(self):
+        return np.array([self.concepts[concept.field_name] for concept in CONCEPTS])
 
     @classmethod
     def pad_token(cls):

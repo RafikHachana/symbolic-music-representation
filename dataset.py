@@ -14,6 +14,7 @@ import sys
 from config import DATASET_PATH
 import wandb
 import gc
+from concepts import CONCEPTS
 
 
 def get_file_paths(dataset_path):
@@ -56,7 +57,8 @@ def collate_fn(batch):
     labels = torch.stack([item['labels'] for item in batch])
     octaves = torch.stack([item['octaves'] for item in batch])
     absolute_start = torch.stack([item['absolute_start'] for item in batch])
-    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels, 'octaves': octaves, 'absolute_start': absolute_start}
+    concepts = torch.stack([item['concepts'] for item in batch])
+    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'labels': labels, 'octaves': octaves, 'absolute_start': absolute_start, 'concepts': concepts}
 
 def safe_parse_midi(path):
     try:
@@ -74,7 +76,7 @@ def safe_parse_midi(path):
         return None
 
 class MIDIRepresentationDataset(Dataset):
-    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False, padding=False, wandb_logger=None) -> None:
+    def __init__(self, midi_file_paths: List[str], max_length: int, piano_only=False, padding=False, wandb_logger=None, use_concepts=True) -> None:
         super().__init__()
         self.max_length = max_length
 
@@ -92,6 +94,7 @@ class MIDIRepresentationDataset(Dataset):
         self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
         self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
         self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
+        self.concepts = np.memmap("concepts.tmp", shape=(len(midi_file_paths), max_length, len(CONCEPTS)), mode="w+")
         self.song_lengths = []
         print(f"Found {len(midi_file_paths)} total paths")
         clipped_start_or_duration = 0
@@ -119,16 +122,24 @@ class MIDIRepresentationDataset(Dataset):
                         x.duration = 1000
                         clipped_start_or_duration+=1
 
+                if use_concepts:
+                    for concept in CONCEPTS:
+                        parsed_midi = concept.calculate(parsed_midi)
+
                 song = [x.to_vector() for x in parsed_midi]
+
+                concepts = [x.concepts_to_vector() for x in parsed_midi]
 
                 # Degenerate dataset instance, skip
                 if not len(song):
                     continue
                 non_clipped_song_length = len(song)
                 song = song[:self.max_length]
+                concepts = concepts[:self.max_length]
                 original_song_length = len(song)
                 self.song_lengths.append(non_clipped_song_length)
                 song += [NoteToken.pad_token()]*(self.max_length - len(song))
+                concepts += [np.zeros(concepts[0].shape)]*(self.max_length - len(concepts))
 
                 octaves = [x.octave for x in parsed_midi][:self.max_length]
                 octaves += [-1]*(self.max_length - len(octaves))
@@ -146,6 +157,7 @@ class MIDIRepresentationDataset(Dataset):
                 self.note_octaves[self.n_instances, :] = octaves
                 self.note_absolute_start[self.n_instances, :] = absolute_starts
                 self.attention_masks[self.n_instances, :] = attention_mask
+                self.concepts[self.n_instances, :, :] = concepts
 
                 self.n_instances += 1
 
@@ -200,7 +212,8 @@ class MIDIRepresentationDataset(Dataset):
             'attention_mask': torch.tensor(self.attention_masks[index]).long(),
             'labels': input_ids.clone(),
             'octaves': torch.tensor(self.note_octaves[index]).long(),
-            'absolute_start': torch.tensor(self.note_absolute_start[index]).long()
+            'absolute_start': torch.tensor(self.note_absolute_start[index]).long(),
+            'concepts': torch.tensor(self.concepts[index]).float()
         }
 
     def __del__(self):
