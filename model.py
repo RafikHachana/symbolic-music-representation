@@ -107,7 +107,7 @@ class TransformerModel(pl.LightningModule):
 
         memory = self.encoder(
             src_emb.transpose(0, 1), 
-            src_mask=src_mask, 
+            # src_mask=src_mask, 
             src_key_padding_mask=src_key_padding_mask
         )
 
@@ -137,19 +137,24 @@ class TransformerModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         return self._process_batch(batch, batch_idx, 'train')
 
+    def generate_square_subsequent_mask(self, size=200): # Generate mask covering the top right triangle of a matrix
+        mask = torch.triu(torch.full((size, size), float('-inf'), device=self.device), diagonal=1)
+        return mask
+
 
     def _process_batch(self, batch, batch_idx, mode):
         # torch.autograd.set_detect_anomaly(True)
         opt = self.optimizers()
         input_ids = batch['input_ids'][:, :-1]
         labels = batch['labels']
-        concepts = batch['concepts']
+        # For now we ignore the last the token concept because we are only dealing with concepts in the encoder
+        concepts = batch['concepts'][:, :-1]
 
         tgt_input = labels[:, :-1]
         tgt_output = [labels[:, 1:, x] for x in range(5)]
 
 
-        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
+        tgt_mask = self.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
         logits, concept_predictions = self(input_ids, tgt_input, tgt_mask=tgt_mask,
          src_key_padding_mask=(batch['attention_mask'][:, :-1] == 0).bool(), 
@@ -172,15 +177,15 @@ class TransformerModel(pl.LightningModule):
 
             self.log(f"{loss_names[ind]}_{mode}_loss", loss.item())
             if mode == "val":
-                accuracy = self._calculate_accuracy(logit, tgt)
+                accuracy = self._calculate_accuracy(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
                 self.log(f"{loss_names[ind]}_{mode}_accuracy", accuracy)
                 total_acc += accuracy
 
         if self.use_concepts:
             total_concept_loss = 0
             for ind, concept_description in enumerate(CONCEPTS):
-                concept_groundtruth = concepts[concept_description.field_name]
-                concept_loss = self.concept_criterion(concept_predictions[ind].view(-1), concept_groundtruth.float().view(-1))
+                concept_groundtruth = concepts[:, :, ind]
+                concept_loss = self.concept_criterion(concept_predictions[ind].reshape(-1), concept_groundtruth.float().reshape(-1))
                 if mode == "train": self.manual_backward(concept_loss, retain_graph=True)
                 total_concept_loss += concept_loss.item()
                 self.log(f"{concept_description.field_name}_concept_{mode}_loss", concept_loss.item())
@@ -225,7 +230,7 @@ class TransformerModel(pl.LightningModule):
 
         for _ in range(max_gen_length - conditioning_sequence.size(1)):
             tgt_input = generated_sequence[:, -1:, :]  # Take the last token
-            tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
+            tgt_mask = self.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
 
             with torch.no_grad():
                 logits, _ = self(

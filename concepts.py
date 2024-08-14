@@ -3,15 +3,21 @@ Has different functions to calculate high level concepts from a list of musical 
 """
 
 from typing import List, Callable, Tuple
-from tokenizer import NoteToken
 from dataclasses import dataclass
 
-
-def calculate_average_velocity_per_bar(note_tokens: List[NoteToken]) -> List[NoteToken]:
+def group_bars(note_tokens: List):
     # Group notes by the bar (using previous_downbeat as the identifier)
     bars = {}
     for note in note_tokens:
+        if note.previous_downbeat not in bars:
+            bars[note.previous_downbeat] = []
         bars[note.previous_downbeat].append(note)
+
+    return bars
+
+
+def calculate_average_velocity_per_bar(note_tokens: List) -> List:
+    bars = group_bars(note_tokens)
 
     # Calculate average velocity for each bar and assign it to notes
     for bar_notes in bars.values():
@@ -21,11 +27,8 @@ def calculate_average_velocity_per_bar(note_tokens: List[NoteToken]) -> List[Not
     
     return note_tokens
 
-def calculate_average_absolute_pitch_per_bar(note_tokens: List[NoteToken]) -> List[NoteToken]:
-    # Group notes by the bar (using previous_downbeat as the identifier)
-    bars = {}
-    for note in note_tokens:
-        bars[note.previous_downbeat].append(note)
+def calculate_average_absolute_pitch_per_bar(note_tokens: List) -> List:
+    bars = group_bars(note_tokens)
 
     # Calculate average pitch for each bar and assign it to notes
     for bar_notes in bars.values():
@@ -39,13 +42,13 @@ def calculate_average_absolute_pitch_per_bar(note_tokens: List[NoteToken]) -> Li
 @dataclass
 class Concept:
     name: str
-    calculate: Callable[[List[NoteToken]], List[NoteToken]]
+    calculate: Callable[[List], List]
     range: Tuple[float, float]
-    is_discrete: bool = False
     field_name: str
+    is_discrete: bool = False
 
 
 CONCEPTS = [
-    Concept("Average Velocity per Bar", calculate_average_velocity_per_bar, (0, 127), False, "bar_velocity"),
-    Concept("Average Absolute Pitch per Bar", calculate_average_absolute_pitch_per_bar, (0, 127), False, "bar_pitch")
+    Concept("Average Velocity per Bar", calculate_average_velocity_per_bar, (0, 127), "bar_velocity"),
+    Concept("Average Absolute Pitch per Bar", calculate_average_absolute_pitch_per_bar, (0, 127), "bar_pitch")
 ]
