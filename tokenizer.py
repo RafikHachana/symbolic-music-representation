@@ -70,6 +70,8 @@ class NoteToken:
 def tokenize(midi: pretty_midi.PrettyMIDI):
     result = []
     tick = get_64th_note_duration(midi)
+    if tick == 0:
+        raise ValueError("MIDI tick is 0")
     downbeats = midi.get_downbeats()
     for ind, track in enumerate(midi.instruments):
         current_downbeat_ind = 0
