@@ -15,8 +15,24 @@ from config import DATASET_PATH
 import wandb
 import gc
 from concepts import CONCEPTS
+from datetime import datetime
+from functools import wraps
 
 
+def perf(name):
+    def calculate_time(func):
+        @wraps(func)
+        def calc(*args, **kwargs):
+            start = datetime.utcnow()
+            result = func(*args, **kwargs)
+            print(f"{name} : {(datetime.utcnow() - start).total_seconds()}s")
+            return result
+
+        return calc
+    return calculate_time
+
+
+@perf("glob")
 def get_file_paths(dataset_path):
     result = Path(dataset_path).glob("**/*.mid")
     result = [str(x) for x in result]
@@ -66,6 +82,7 @@ def safe_parse_midi(path):
         if os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
+        print("Cache Miss!")
         result = tokenize(pretty_midi.PrettyMIDI(path))
         validate_sorting(result)
         with open(cache_path, "wb") as f:
@@ -88,30 +105,50 @@ class MIDIRepresentationDataset(Dataset):
 
         self.wandb_logger = wandb_logger
 
-        # midi_file_paths = midi_file_paths[:400]
+        # midi_file_paths = midi_file_paths[:5000]
 
-        self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, 5), mode="w+", dtype=np.uint16)
-        self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
-        self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
-        self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
-        self.concepts = np.memmap("concepts.tmp", shape=(len(midi_file_paths), max_length, len(CONCEPTS)), mode="w+")
-        self.song_lengths = []
-        print(f"Found {len(midi_file_paths)} total paths")
-        clipped_start_or_duration = 0
-        with ThreadPoolExecutor(max_workers=50) as executor:
-            futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths]
+        if all(Path(x).is_file() for x in ['data.tmp', 'octaves.tmp', 'absolute_start.tmp', 'attention_masks.tmp', 'concepts.tmp']):
+            print("All cache files exist! Loading data directly from the on-disk NumPy arrays!")
+            self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, 5), mode="r", dtype=np.uint16)
+            self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="r")
+            self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="r")
+            self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="r")
+            self.concepts = np.memmap("concepts.tmp", shape=(len(midi_file_paths), max_length, len(CONCEPTS)), mode="r")
 
-            for f in tqdm(as_completed(futures), total=len(midi_file_paths)):
-                parsed_midi = f.result()
+            self.n_instances = 0
+            for i in range(len(midi_file_paths)):
+                if np.all(self.songs[i] == 0):
+                    break
+                self.n_instances += 1
+            print("Number of instances", self.n_instances)
+        else:
+            self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, 5), mode="w+", dtype=np.uint16)
+            self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
+            self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
+            self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="w+")
+            self.concepts = np.memmap("concepts.tmp", shape=(len(midi_file_paths), max_length, len(CONCEPTS)), mode="w+")
+            self.song_lengths = []
+            print(f"Found {len(midi_file_paths)} total paths")
+            clipped_start_or_duration = 0
+            used_padding = False
+            for path in tqdm(midi_file_paths):
+                # with ThreadPoolExecutor(max_workers=1) as executor:
+                #     print("Submitting tasks to executor ...")
+                #     futures = [executor.submit(safe_parse_midi, path) for path in midi_file_paths]
+                #     print("Collecting task result ...")
+
+                #     for f in tqdm(as_completed(futures), total=len(midi_file_paths)):
+                parsed_midi = safe_parse_midi(path)
                 if parsed_midi is None:
                     continue
 
+                # if len(parsed_midi) >= max_length:
+                #     continue
                 if piano_only:
                     parsed_midi = [x for x in parsed_midi if x.instrument == 0]
                     # Skip if we want a piano dataset and the song does not contain piano
                     if not len(parsed_midi):
                         continue
-
 
                 # TODO: This is also a temporary solution until we have bins
                 for x in parsed_midi:
@@ -139,6 +176,8 @@ class MIDIRepresentationDataset(Dataset):
                 concepts = concepts[:self.max_length]
                 original_song_length = len(song)
                 self.song_lengths.append(non_clipped_song_length)
+                if self.max_length - len(song) > 0:
+                    used_padding = True
                 song += [NoteToken.pad_token()]*(self.max_length - len(song))
                 concepts += [np.zeros(concepts[0].shape)]*(self.max_length - len(concepts))
 
@@ -162,39 +201,45 @@ class MIDIRepresentationDataset(Dataset):
 
                 self.n_instances += 1
 
+                del parsed_midi
+                del song
+                del concepts
                 gc.collect()
-        # for path in tqdm(midi_file_paths):
-        #     parsed_midi = safe_parse_midi(path)
-        print("Number of instances", self.n_instances)
-        print("Tokens with clipped Start or Duration", clipped_start_or_duration)
+            # for path in tqdm(midi_file_paths):
+            #     parsed_midi = safe_parse_midi(path)
+            print("Number of instances", self.n_instances)
+            print("Tokens with clipped Start or Duration", clipped_start_or_duration)
 
-        # TODO: We might log this later on wandb
-        # instrument_usage = {}
-        # for x in self.songs[:self.n_instances]:
-        #     used_instruments = set()
-        #     for note in x:
-        #         used_instruments.add(note[4])
-        #     for instr in used_instruments:
-        #         if instr not in instrument_usage:
-        #             instrument_usage[instr] = 0
-        #         instrument_usage[instr] += 1
-        # print("Most used instrument")
-        # for instr, count in sorted(instrument_usage.items(), key=lambda x: (x[1],x[0]), reverse=True)[:10]:
-        #     print("Instrument", instr-1, "used in ", count, "songs")
-        print()
-        
-        # print("Max pitch", max([max([note[0] for note in song]) for song in self.songs[:self.n_instances]]))
-        # print("Max start", max([max([note[1] for note in song]) for song in self.songs[:self.n_instances]]))
-        # print("Max duration", max([max([note[2] for note in song]) for song in self.songs[:self.n_instances]]))
-        # print("Max velocity", max([max([note[3] for note in song]) for song in self.songs[:self.n_instances]]))
-        # print("Max instrument", max([max([note[4] for note in song]) for song in self.songs[:self.n_instances]]))
-        # print("Min length", min([len(x) for x in self.songs[:self.n_instances]]))
+            # TODO: We might log this later on wandb
+            # instrument_usage = {}
+            # for x in self.songs[:self.n_instances]:
+            #     used_instruments = set()
+            #     for note in x:
+            #         used_instruments.add(note[4])
+            #     for instr in used_instruments:
+            #         if instr not in instrument_usage:
+            #             instrument_usage[instr] = 0
+            #         instrument_usage[instr] += 1
+            # print("Most used instrument")
+            # for instr, count in sorted(instrument_usage.items(), key=lambda x: (x[1],x[0]), reverse=True)[:10]:
+            #     print("Instrument", instr-1, "used in ", count, "songs")
+            print()
 
-        assert not np.isnan(np.sum(self.songs[:self.n_instances])), "Some songs have NaN!"
-        assert not np.any(np.isinf(self.songs[:self.n_instances])), "Some songs have Inf!"
+            if used_padding:
+                print("-----------------------------> USED PADDING --------------------------")
+            
+            # print("Max pitch", max([max([note[0] for note in song]) for song in self.songs[:self.n_instances]]))
+            # print("Max start", max([max([note[1] for note in song]) for song in self.songs[:self.n_instances]]))
+            # print("Max duration", max([max([note[2] for note in song]) for song in self.songs[:self.n_instances]]))
+            # print("Max velocity", max([max([note[3] for note in song]) for song in self.songs[:self.n_instances]]))
+            # print("Max instrument", max([max([note[4] for note in song]) for song in self.songs[:self.n_instances]]))
+            # print("Min length", min([len(x) for x in self.songs[:self.n_instances]]))
 
-        if self.wandb_logger is not None:
-            self._log_dataset_metadata()
+            assert not np.isnan(np.sum(self.songs[:self.n_instances])), "Some songs have NaN!"
+            assert not np.any(np.isinf(self.songs[:self.n_instances])), "Some songs have Inf!"
+
+            if self.wandb_logger is not None:
+                self._log_dataset_metadata()
 
     def _log_dataset_metadata(self):
         # Log the original song lengths
