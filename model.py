@@ -15,6 +15,8 @@ from position_encoding import positional_encoding_classes
 from datetime import datetime
 from concepts import CONCEPTS
 import torch.nn.functional as F
+import traceback
+import pdb
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -172,6 +174,12 @@ class TransformerModel(pl.LightningModule):
         if mode == "train": opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
+            if torch.isnan(loss):
+                print("NaN Loss!!")
+                print("Instrument number ", ind)
+                print("Logits", logit)
+                print("Entering debugger ...")
+                pdb.set_trace()
             if mode == "train": self.manual_backward(loss, retain_graph=True)
             total_loss += loss.item()
 
