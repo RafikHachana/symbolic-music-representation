@@ -131,7 +131,8 @@ class MIDIRepresentationDataset(Dataset):
                 concepts = [x.concepts_to_vector() for x in parsed_midi]
 
                 # Degenerate dataset instance, skip
-                if not len(song):
+                # we also skip any sequences that are less than 10 tokens
+                if len(song) < 10:
                     continue
                 non_clipped_song_length = len(song)
                 song = song[:self.max_length]
