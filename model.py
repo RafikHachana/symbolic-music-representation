@@ -17,10 +17,13 @@ from concepts import CONCEPTS
 import torch.nn.functional as F
 import traceback
 import pdb
+import math
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base", use_concepts=True):
+                 d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, max_length, lr, positional_encoding="base", use_concepts=True,
+                 warmup_steps=500):
+
         super(TransformerModel, self).__init__()
         self.save_hyperparameters()
 
@@ -29,6 +32,8 @@ class TransformerModel(pl.LightningModule):
         self.duration_embedding = nn.Embedding(duration_vocab_size, d_model)
         self.velocity_embedding = nn.Embedding(velocity_vocab_size, d_model)
         self.instrument_embedding = nn.Embedding(instrument_vocab_size, d_model)
+
+        self.warmup_steps = warmup_steps
 
         # self.positional_encoding = nn.Parameter(torch.zeros(1, max_length, d_model))
         if positional_encoding not in positional_encoding_classes:
@@ -147,6 +152,7 @@ class TransformerModel(pl.LightningModule):
     def _process_batch(self, batch, batch_idx, mode):
         # torch.autograd.set_detect_anomaly(True)
         opt = self.optimizers()
+        scheduler = self.lr_schedulers()
         input_ids = batch['input_ids'][:, :-1]
         labels = batch['labels']
         # For now we ignore the last the token concept because we are only dealing with concepts in the encoder
@@ -206,6 +212,9 @@ class TransformerModel(pl.LightningModule):
             nn.utils.clip_grad_norm_(self.parameters(), 1.0)
             opt.step()
 
+        # if mode == 'val':
+        #     scheduler.step(total_loss)
+
         # Average the total loss
         avg_loss = total_loss / len(logits)
         self.log(f'{mode}_loss', avg_loss)
@@ -219,8 +228,11 @@ class TransformerModel(pl.LightningModule):
         return self._process_batch(batch, batch_idx, 'val')
 
     def configure_optimizers(self):
-        optimizer = Adam(self.parameters(), lr=self.lr)
-        return optimizer
+        optimizer = AdamW(self.parameters(), lr=1, weight_decay=0.01)
+        lr_func = lambda step: min(self.lr, self.lr / math.sqrt(max(step, 1)/self.warmup_steps))
+        # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer)
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_func)
+        return [optimizer], [scheduler]
 
 
     def generate_song(self, conditioning_sequence, max_gen_length=512, temperature=1.0):
