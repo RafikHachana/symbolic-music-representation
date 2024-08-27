@@ -2,9 +2,9 @@ import argparse
 import pytorch_lightning as pl
 import torch
 from torch import nn
-from torch.optim import Adam
+from torch.optim import Adam, lr_scheduler, AdamW
 from torch.utils.data import DataLoader, Dataset
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 # from transformers import BertTokenizer, BertModel
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
@@ -18,6 +18,8 @@ import torch.nn.functional as F
 import traceback
 import pdb
 import math
+
+pl.seed_everything(42, workers=True)
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -209,8 +211,9 @@ class TransformerModel(pl.LightningModule):
             self.log(f"total_concept_{mode}_loss", total_concept_loss / len(CONCEPTS))
                 
         if mode == "train": 
-            nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+            # nn.utils.clip_grad_norm_(self.parameters(), 1.0)
             opt.step()
+            scheduler.step()
 
         # if mode == 'val':
         #     scheduler.step(total_loss)
@@ -320,6 +323,12 @@ if __name__ == '__main__':
         default=256
     )
 
+    parser.add_argument(
+        '--no-concepts',
+        '-noconcepts',
+        action="store_true"
+    )
+
     grp = parser.add_argument_group('batch_size').add_mutually_exclusive_group()
     grp.add_argument(
         '--batch-size',
@@ -341,14 +350,22 @@ if __name__ == '__main__':
 
 
 
-    wandb_logger = WandbLogger(project='symbolic_music_representation', name=f"{args.positional_encoding}-{datetime.now().strftime('%d-%m@%H:%M')}")
+    wandb_logger = WandbLogger(project='symbolic_music_representation', name=f"{args.positional_encoding}-{datetime.now().strftime('%d-%m@%H:%M')}", log_model=True)
 
     try:
         wandb_logger.experiment.config["batch_size"] = BATCH_SIZE
-        dataset = MIDIRepresentationDataset(get_file_paths(DATASET_PATH), max_length=args.max_sequence_length, piano_only=True, wandb_logger=wandb_logger)
+        wandb_logger.experiment.config["random_seed"] = 42
+        dataset = MIDIRepresentationDataset(
+            get_file_paths(DATASET_PATH),
+            max_length=args.max_sequence_length,
+            piano_only=True,
+            wandb_logger=wandb_logger,
+            use_concepts=not args.no_concepts
+        )
 
         # use 20% of training data for validation
-        train_set_size = int(len(dataset) * 0.8)
+        # TODO: Make the training set bigger
+        train_set_size = int(len(dataset) * 0.9)
         valid_set_size = len(dataset) - train_set_size
 
         # split the train set into two
@@ -357,16 +374,16 @@ if __name__ == '__main__':
         wandb_logger.experiment.config["train_dataset_instances"] = len(train_set)
         wandb_logger.experiment.config["valid_dataset_instances"] = len(valid_set)
 
-        train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, collate_fn=collate_fn, num_workers=19)
-        valid_loader = DataLoader(valid_set, batch_size=2, collate_fn=collate_fn, num_workers=19)
+        train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, collate_fn=collate_fn)
+        valid_loader = DataLoader(valid_set, batch_size=BATCH_SIZE, collate_fn=collate_fn)
 
         vocab_size = 12
         d_model = 512
         nhead = 8
         num_encoder_layers = 6
-        num_decoder_layers = 6
+        num_decoder_layers = 8
         dim_feedforward = 2048
-        lr = 1e-7
+        lr = 1e-3
 
         # TODO: Get these values
         pitch_vocab_size = 13
@@ -376,15 +393,25 @@ if __name__ == '__main__':
         instrument_vocab_size = 129
 
         model = TransformerModel(pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
-                                d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, args.max_sequence_length, lr, positional_encoding=args.positional_encoding)
+                                d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, args.max_sequence_length, lr,
+                                positional_encoding=args.positional_encoding, use_concepts=not args.no_concepts)
         # logger = TensorBoardLogger('tb_logs', name='my_model')
 
         # For topology and gradients
         wandb_logger.watch(model)
-        trainer = pl.Trainer(max_epochs=100, callbacks=[ModelCheckpoint(monitor='train_loss')], logger=wandb_logger,
+        trainer = pl.Trainer(
+            max_epochs=5,
+            callbacks=[
+                ModelCheckpoint(monitor='train_loss'),
+                LearningRateMonitor(logging_interval='step')
+            ],
+            logger=wandb_logger,
         # auto_scale_batch_size='binsearch' if args.batch_size_auto else None
-        check_val_every_n_epoch=1,
-        fast_dev_run=False
+            # check_val_every_n_epoch=1,
+            fast_dev_run=False,
+            log_every_n_steps=20,
+            val_check_interval=50,
+            deterministic=True
         )
         # TODO: Tune this but make the batch size and train loader part of the model
         # trainer.tune(model)
