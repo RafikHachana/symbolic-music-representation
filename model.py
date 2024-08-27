@@ -185,8 +185,10 @@ class TransformerModel(pl.LightningModule):
 
             self.log(f"{loss_names[ind]}_{mode}_loss", loss.item())
             if mode == "val":
+                # Calculate accuracy
                 accuracy = self._calculate_accuracy(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
                 self.log(f"{loss_names[ind]}_{mode}_accuracy", accuracy)
+                self.log(f"{loss_names[ind]}_{mode}_perplexity", torch.exp(loss).item())
                 total_acc += accuracy
 
         if self.use_concepts:
