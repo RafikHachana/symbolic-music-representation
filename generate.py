@@ -1,7 +1,10 @@
 import torch
 import wandb
 import argparse
-import model  # Assuming the model is saved as model.py
+import model
+from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
+from config import DATASET_PATH
+
 
 def load_checkpoint_from_wandb(run_id, artifact_name, checkpoint_file):
     """
@@ -62,12 +65,24 @@ def main():
     checkpoint = torch.load(model_checkpoint)
     generator.load_state_dict(checkpoint['state_dict'])
 
+    dataset = MIDIRepresentationDataset(
+            get_file_paths(DATASET_PATH),
+            max_length=512,
+            piano_only=True,
+            wandb_logger=None,
+            use_concepts=True
+        )
+
     # Load the conditioning sequence
-    conditioning_sequence = torch.load(args.conditioning_sequence)
+    conditioning_sequence = dataset[0]['input_ids'].unsqueeze(0)
 
     # Generate a song
     generated_song = generator.generate_song(conditioning_sequence=conditioning_sequence, max_gen_length=args.max_gen_length, temperature=args.temperature)
+    
+    print(generated_song)
+    print(generated_song.shape)
 
+    print()
     # Save the generated song
     torch.save(generated_song, "generated_song.pt")
     print("Generated song saved as 'generated_song.pt'")
