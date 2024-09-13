@@ -1,5 +1,6 @@
 import argparse
 import pytorch_lightning as pl
+from tokenizer import NoteToken
 import torch
 from torch import nn
 from torch.optim import Adam, lr_scheduler, AdamW
@@ -20,6 +21,7 @@ import pdb
 import math
 
 pl.seed_everything(42, workers=True)
+# from torchmetrics import BLEUScore
 
 class TransformerModel(pl.LightningModule):
     def __init__(self, pitch_vocab_size, time_vocab_size, duration_vocab_size, velocity_vocab_size, instrument_vocab_size,
@@ -84,6 +86,12 @@ class TransformerModel(pl.LightningModule):
         correct = (predictions == targets).float()
         accuracy = correct.sum() / targets.numel()
         return accuracy
+    
+    # def _calculate_bleu(self, logits, targets):
+    #     bleu = BLEUScore()
+    #     preds = logits.argmax(dim=-1).tolist()
+    #     targets = targets.tolist()
+    #     return bleu(preds, targets)
 
     def forward(self, src, tgt,
                 src_mask=None,
@@ -93,7 +101,8 @@ class TransformerModel(pl.LightningModule):
                 octaves_src=None,
                 octaves_tgt=None,
                 absolute_start_src=None,
-                absolute_start_tgt=None
+                absolute_start_tgt=None,
+                concept_control_signal=None
                 ):
         # print("Min start", torch.min(src[:, :, 1]))
         # print(src[:, :, 1])
@@ -124,6 +133,27 @@ class TransformerModel(pl.LightningModule):
         concept_predictions = []
         if self.use_concepts:
             concept_predictions = [predictor(memory) for predictor in self.concept_predictors]
+
+        if concept_control_signal is not None:
+            for i, (pred, control_signal) in enumerate(zip(concept_predictions, concept_control_signal)):
+                # Extract the weights W of the current linear probe (self.concept_predictors[i])
+                W = self.concept_predictors[i].weight  # W.shape is (out_dim, hidden_dim)
+                b = self.concept_predictors[i].bias  # Bias term (optional, can be None)
+
+                # Compute W @ h + b (including the bias)
+                W_h_b = torch.matmul(W, memory) + b.unsqueeze(0) if b is not None else torch.matmul(W, memory)
+
+                # Subtract the control signal c
+                diff = W_h_b - control_signal.unsqueeze(0)
+
+                # Compute the inverse of (W @ W^T)
+                W_WT_inv = torch.inverse(torch.matmul(W, W.T))
+
+                # Apply the update formula
+                adjustment = torch.matmul(W.T, torch.matmul(W_WT_inv, diff))
+
+                # Update the hidden state h
+                memory = memory - adjustment
 
         output = self.decoder(
             tgt_emb.transpose(0, 1), 
@@ -161,7 +191,7 @@ class TransformerModel(pl.LightningModule):
         concepts = batch['concepts'][:, :-1]
 
         tgt_input = labels[:, :-1]
-        tgt_output = [labels[:, 1:, x] for x in range(5)]
+        tgt_output = [labels[:, 1:, x] for x in range(NoteToken.TOKEN_SIZE)]
 
 
         tgt_mask = self.generate_square_subsequent_mask(tgt_input.size(1)).to(self.device)
@@ -178,7 +208,7 @@ class TransformerModel(pl.LightningModule):
         total_loss = 0
         total_acc = 0
 
-        loss_names = ['pitch', 'start', 'duration','velocity', 'instrument']
+        loss_names = ['pitch', 'start', 'duration','velocity', 'instrument', 'octave']
         if mode == "train": opt.zero_grad()
         for ind, (logit, tgt) in enumerate(zip(logits, tgt_output)):
             loss = self.criterion(logit.view(-1, logit.size(-1)), tgt.reshape(-1))
@@ -238,7 +268,7 @@ class TransformerModel(pl.LightningModule):
         return [optimizer], [scheduler]
 
 
-    def generate_song(self, conditioning_sequence, max_gen_length=512, temperature=1.0):
+    def generate_song(self, conditioning_sequence, max_gen_length=512, temperature=1.0, concept_control_signal=None):
         """
         Generate a song autoregressively given a conditioning song sequence.
 
@@ -267,7 +297,8 @@ class TransformerModel(pl.LightningModule):
                     absolute_start_src=None,
                     absolute_start_tgt=None,
                     octaves_src=None,
-                    octaves_tgt=None
+                    octaves_tgt=None,
+                    concept_control_signal=concept_control_signal
                 )
 
             # Extract the logits for the last token

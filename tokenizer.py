@@ -3,6 +3,7 @@ import numpy as np
 import pretty_midi
 from tqdm import tqdm
 
+
 # def get_previous_downbeat(note: pretty_midi.Note, midi: pretty_midi.PrettyMIDI):
 #     for i in range(len(midi.get_downbeats())):
 #         if note.start < midi.get_downbeats()[i]:
@@ -24,6 +25,7 @@ def get_note_position_in_bar(note: pretty_midi.Note, tick: float, previous_downb
     return time_within_bar // tick
 
 class NoteToken:
+    TOKEN_SIZE = 6
     def __init__(self, note: pretty_midi.Note, instrument: int, time_tick: float, previous_downbeat: float):
         self.pitch = note.pitch % 12
         # TODO: Understand why we get negative values here
@@ -51,20 +53,32 @@ class NoteToken:
     
     def to_vector(self):
         # Shift values by one to account for padding tokens with 0
-        return np.array([
-            self.pitch+1,
-            self.start+1,
-            self.duration+1,
-            self.velocity+1,
-            self.instrument+1
+        result = np.array([
+            self.pitch+3,
+            self.start+3,
+            self.duration+3,
+            self.velocity+3,
+            self.instrument+3,
+            self.octave+3
         ])
+        assert result.shape == (self.TOKEN_SIZE,), f"Expected shape {self.TOKEN_SIZE}, got {result.shape}"
+        return result
     
     def concepts_to_vector(self):
         return np.array([self.concepts[concept.field_name] for concept in CONCEPTS])
+    
+    @classmethod
+    def bos_token(cls):
+        return np.array([1]*cls.TOKEN_SIZE)
+    
+    def eos_token(cls):
+        return np.array([2]*cls.TOKEN_SIZE)
 
     @classmethod
     def pad_token(cls):
-        return np.array([0]*5)
+        return np.array([0]*cls.TOKEN_SIZE)
+    
+# class NoteTokenForConceptLoss
 
     
 def tokenize(midi: pretty_midi.PrettyMIDI):
