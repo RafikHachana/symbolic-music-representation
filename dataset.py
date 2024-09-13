@@ -109,7 +109,7 @@ class MIDIRepresentationDataset(Dataset):
 
         if all(Path(x).is_file() for x in ['data.tmp', 'octaves.tmp', 'absolute_start.tmp', 'attention_masks.tmp', 'concepts.tmp']):
             print("All cache files exist! Loading data directly from the on-disk NumPy arrays!")
-            self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, 5), mode="r", dtype=np.uint16)
+            self.songs = np.memmap("data.tmp", shape=(len(midi_file_paths), max_length, NoteToken.TOKEN_SIZE), mode="r", dtype=np.uint16)
             self.note_octaves = np.memmap("octaves.tmp", shape=(len(midi_file_paths), max_length), mode="r")
             self.note_absolute_start = np.memmap("absolute_start.tmp", shape=(len(midi_file_paths), max_length), mode="r")
             self.attention_masks = np.memmap("attention_masks.tmp", shape=(len(midi_file_paths), max_length), mode="r")
