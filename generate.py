@@ -4,6 +4,7 @@ import argparse
 import model
 from dataset import MIDIRepresentationDataset, collate_fn, get_file_paths
 from config import DATASET_PATH
+import pdb
 
 
 def load_checkpoint_from_wandb(run_id, artifact_name, checkpoint_file):
@@ -19,10 +20,12 @@ def load_checkpoint_from_wandb(run_id, artifact_name, checkpoint_file):
         checkpoint_path (str): Path to the downloaded checkpoint file.
     """
     # Initialize a new W&B run to download artifacts
-    with wandb.init(project="symbolic_music_representation", resume="allow"):
-        artifact = wandb.use_artifact(f'rh-iu/symbolic_music_representation/{artifact_name}:latest', type='model')
-        artifact_dir = artifact.download()
-        checkpoint_path = f'{artifact_dir}/model.ckpt'
+    api = wandb.Api()
+    runs = api.runs("rh-iu/symbolic_music_representation", order="-created_at")
+    latest_run = runs[1]
+    artifact = latest_run.logged_artifacts()[0]
+    artifact_dir = artifact.download()
+    checkpoint_path = f'{artifact_dir}/model.ckpt'
     
     return checkpoint_path
 
